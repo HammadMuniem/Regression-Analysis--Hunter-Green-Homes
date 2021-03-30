@@ -1,0 +1,393 @@
+---
+title: "Hunter Homes"
+output: rmarkdown::github_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r results='hide'}
+
+library(rio)
+library(formattable)
+library(dplyr)
+library(tidyverse)
+library(readxl)
+library(corrplot)
+library(stargazer)
+library(car)
+library(PerformanceAnalytics)
+library(tidyr)
+library(tm)
+```
+
+
+```{r}
+df<-read_xlsx("HuntersGreenHomeSales.xlsx",sheet = "Data")
+```
+
+
+```{r}
+colSums(is.na(df))
+
+```
+
+```{r}
+df$garages[is.na(df$garages)]<-median(df$garages,na.rm=TRUE)
+```
+
+```{r}
+df2 <- filter(df, Roof == "Shingle"| Roof=="Tile")
+df2$Roof<-as.factor(df2$Roof)
+summary(df2$Roof)
+```
+
+
+
+```{r}
+df2$sellyear<-str_sub(df2$datesold,1,4)
+df2$sellyear<-as.double(df2$sellyear)
+df2$Age<-df2$sellyear-df2$yrblt
+```
+
+
+```{r}
+df2$LotUsed<-df2$sqft/df2$lotsqft
+plot(df2$LotUsed,df2$pricesold)
+```
+
+```{r}
+df2$bathstotal<-df2$bathsfull+0.5*(df2$bathshalf)
+plot(df2$listprice,df2$pricesold)
+abline(0,1)
+```
+
+
+
+```{r}
+df2 <- df2 %>%
+  mutate(PoolType = case_when(Pool == "Private" ~ "Private",
+                              Pool== "None"~"None",
+                              Pool == "Community"~"Community",
+                              Pool == "Private, Community"~"Private"))
+
+df2$PoolType<-as.factor(df2$PoolType)
+levels(df2$PoolType)
+df2$PoolType<-relevel(df2$PoolType,'None')
+```
+
+```{r}
+boxplot(df2$pricesold)
+boxplot(df2$Beds)
+boxplot(df2$bathstotal)
+boxplot(df2$Age)
+boxplot(df2$lotsqft)
+boxplot(df2$sqft)
+
+```
+
+```{r}
+df3 <- df2[ df2$Beds<6 & df2$Age>15 & df2$bathstotal<4.5 & df2$pricesold<800000 & df2$sqft<6000,]
+summary(df3$Beds)
+```
+
+```{r}
+boxplot(df3$pricesold)
+boxplot(df3$Beds)
+boxplot(df3$bathstotal)
+boxplot(df3$Age)
+boxplot(df3$lotsqft)
+boxplot(df3$sqft)
+plot(df3$Age,df3$pricesold)
+
+```
+
+```{r}
+df3$Street<-removeNumbers(df3$Address) 
+df3$Street<-trimws(df3$Street)
+n_distinct(df3$Street)
+df3$years<-df3$sellyear-2015
+```
+
+```{r}
+school<-c("REGENT SQUARE DR","COURTNEY BREEZE DR","HIGHLAND RIDGE WAY","OSPREY RUN DR","HICKORY MOSS PL","PINE ISLAND CT","WOODRIDGE RUN DR","ASHTON PARK WAY","HAMDEN PARK WAY","HUNTERS PARK WAY","MEADOW LANE CT","REGENT SQUARE DR","HUNTINGTON PARK WAY")
+
+df3 <- df3 %>%
+  mutate(School = case_when(Street %in% school ~ 1, TRUE~0))
+```
+
+```{r}
+parkncourt<-c("PARKWAY GREEN LN","RIDGEWAY POINT PL","LONG RIDGE RD","BRAEMAR DR","OAK BRIDGE ST","FAIRMEADOW DR","HUNTERS GREEN DR","HUNTERS POND DR")
+
+df3 <- df3 %>%
+  mutate(PNC = case_when(Street %in% parkncourt ~ 1, TRUE~0))
+```
+
+```{r}
+clubs<-c("LONGWATER RUN DR","PINNACLE CT","FAZIO CT")
+
+df3 <- df3 %>%
+  mutate(club = case_when(Street %in% clubs ~ 1, TRUE~0))
+```
+
+```{r}
+df3$location<-df3$School+2*df3$club+0.5*df3$PNC
+```
+
+```{r}
+df3$PendingDate<- as.Date(df3$PendingDate)
+df3$PendingDate<-format(df3$PendingDate,"%m")
+df3$PendingDate<-as.double(df3$PendingDate)
+
+```
+
+```{r}
+df3 <- df3 %>%
+  mutate(quarter = case_when(df3$PendingDate <=3 ~ "1st",
+                             df3$PendingDate <=6 & df3$PendingDate>3 ~ "2nd",
+                             df3$PendingDate <=9 & df3$PendingDate>6 ~ "3rd",
+                             df3$PendingDate <=12 & df3$PendingDate>9 ~ "4th"))
+df3$splsale<-as.factor(df3$splsale)
+df3$splsale<-relevel(df3$splsale,"None")
+df3<-df3%>%
+  mutate(splsale = case_when(df3$splsale =="None" ~ "None",
+                                df3$splsale!="None"~"Shortsell/Bank"))
+
+df3$splsale<-as.factor(df3$splsale)
+df3$splsale<-relevel(df3$splsale,"None")
+summary(df3$splsale)
+```
+
+
+
+
+```{r}
+reg1<-lm(formula = pricesold~Beds+bathstotal+sqft+lotsqft+Roof+location+garages+PoolType+years+splsale,data = df3)
+options(scipen = 999)
+summary(reg1)
+
+#Checking for linearity
+plot(reg1$fitted.values,df3$pricesold,pch=1,main="Predicted Values vs Actual Price",ylab = "Predicted Price Sold",xlab = "Actual Price Sold")
+abline(0,1,col="red3",lwd=3)
+
+#checking for normality
+qqnorm(reg1$residuals,pch=20,main="Checking for Normality Plot")
+qqline(reg1$residuals,lwd=3,col="red3")
+
+#Checking for equality of variances
+plot(df3$pricesold,rstandard(reg1),pch=20,main="Equality of Variances")
+abline(0,0,col="red",lwd=3)
+
+#Checking for leverage points
+lev=hat(model.matrix(reg1))
+plot(lev,pch=20,ylim=c(0,.3),main="Leverage Points")
+abline(3*mean(lev),0,col="red",lwd=3)
+
+vif1<-vif(reg1)
+vif1
+options(scipen = 999)
+```
+
+
+```{r}
+reg2<-lm(formula = pricesold~Beds+bathstotal+lotsqft+LotUsed+Roof+location+garages+PoolType+years+splsale,data = df3)
+summary(reg2)
+
+#Checking for linearity
+plot(reg2$fitted.values,df3$pricesold,pch=1,main="Predicted Values vs Actual Price",ylab = "Predicted Price Sold",xlab = "Actual Price Sold")
+abline(0,1,col="red3",lwd=3)
+
+#checking for normality
+qqnorm(reg2$residuals,pch=20,main="Checking for Normality Plot")
+qqline(reg2$residuals,lwd=3,col="red3")
+
+#Checking for equality of variances
+plot(df3$pricesold,rstandard(reg2),pch=20,main="Equality of Variances")
+abline(0,0,col="red",lwd=3)
+
+#Checking for leverage points
+lev=hat(model.matrix(reg2))
+plot(lev,pch=20,ylim=c(0,.3),main="Leverage Points")
+abline(3*mean(lev),0,col="red",lwd=3)
+
+vif2<-vif(reg2)
+```
+```{r}
+reg3<-lm(formula = pricesold~Beds+bathstotal+lotsqft+LotUsed+lotsqft*LotUsed+Roof+location+garages+PoolType+splsale+years,data = df3)
+summary(reg3)
+
+#Checking for linearity
+plot(reg3$fitted.values,df3$pricesold,pch=1,main="Predicted Values vs Actual Price",ylab = "Predicted Price Sold",xlab = "Actual Price Sold")
+abline(0,1,col="red3",lwd=3)
+
+#checking for normality
+qqnorm(reg3$residuals,pch=20,main="Checking for Normality Plot")
+qqline(reg3$residuals,lwd=3,col="red3")
+
+#Checking for equality of variances
+plot(df3$pricesold,rstandard(reg3),pch=20,main="Equality of Variances")
+abline(0,0,col="red",lwd=3)
+
+#Checking for leverage points
+lev=hat(model.matrix(reg3))
+plot(lev,pch=20,ylim=c(0,.3),main="Leverage Points")
+abline(3*mean(lev),0,col="red",lwd=3)
+
+vif3<-vif(reg3)
+```
+```{r}
+stargazer(reg1,reg2,reg3,type="text",title='Results',align = TRUE,out = "reg.txt")
+stargazer(vif1,vif2,vif3,type="text",title='Results',align = TRUE,out = "reg2.txt")
+```
+```{r}
+df3$DaysOnMLSbeforeAgent<-df3$cdom_cumuldaysmls-df3$adom_agentdaysonmarket
+sum(df3$adom_agentdaysonmarket<1)
+df3<-df3[df3$adom_agentdaysonmarket>0,]
+hist(log(df3$adom_agentdaysonmarket))
+```
+
+```{r}
+df$sellyear<-str_sub(df$datesold,1,4)
+df$sellyear<-as.double(df$sellyear)
+df$Age<-df$sellyear-df$yrblt
+df$Street<-removeNumbers(df$Address) 
+df$Street<-trimws(df$Street)
+n_distinct(df$Street)
+df$years<-df$sellyear-2015
+
+df <- df %>%
+  mutate(School = case_when(Street %in% school ~ 1, TRUE~0))
+df <- df %>%
+  mutate(PNC = case_when(Street %in% parkncourt ~ 1, TRUE~0))
+
+df <- df %>%
+  mutate(club = case_when(Street %in% clubs ~ 1, TRUE~0))
+
+df$location<-df$School+2*df$club+0.5*df$PNC
+
+df$DaysOnMLSbeforeAgent<-df$cdom_cumuldaysmls-df3$adom_agentdaysonmarket
+##sum(df$adom_agentdaysonmarket<1)
+df <- filter(df, Roof == "Shingle"| Roof=="Tile")
+df$Roof<-as.factor(df$Roof)
+
+df<-df[df$adom_agentdaysonmarket>0,]
+
+```
+
+```{r}
+df$splsale<-as.factor(df$splsale)
+df$splsale<-relevel(df$splsale,"None")
+df<-df%>%
+  mutate(splsale = case_when(df$splsale =="None" ~ "None",
+                                df$splsale!="None"~"Shortsell/Bank"))
+
+df$splsale<-as.factor(df$splsale)
+df$splsale<-relevel(df$splsale,"None")
+
+df$PendingDate<- as.Date(df$PendingDate)
+df$PendingDate<-format(df$PendingDate,"%m")
+df$PendingDate<-as.double(df$PendingDate)
+
+df <- df %>%
+  mutate(quarter = case_when(df$PendingDate <=3 ~ "1st",
+                             df$PendingDate <=6 & df$PendingDate>3 ~ "2nd",
+                             df$PendingDate <=9 & df$PendingDate>6 ~ "3rd",
+                             df$PendingDate <=12 & df$PendingDate>9 ~ "4th"))
+
+df <- df %>%
+  mutate(PoolType = case_when(Pool == "Private" ~ "Private",
+                              Pool== "None"~"None",
+                              Pool == "Community"~"Community",
+                              Pool == "Private, Community"~"Private"))
+df$Pool<-as.factor(df$Pool)
+levels(df$Pool)
+
+df$negotiate<-df$pricesold/df$listprice
+```
+
+```{r}
+reg4<-lm(formula = adom_agentdaysonmarket~Beds+bathstotal+garages+PoolType+Roof+listprice+sppersqft+splsale+lotsqft+location+Age+poly(DaysOnMLSbeforeAgent,3)+quarter+negotiate,data = df)
+summary(reg4)
+
+#Checking for linearity
+plot(reg4$fitted.values,df$adom_agentdaysonmarket,pch=1,main="Predicted Values vs Actual ADOM",ylab = "Predicted ADOM",xlab = "Actual ADOM")
+abline(0,1,col="red3",lwd=3)
+
+#checking for normality
+qqnorm(reg4$residuals,pch=20,main="Checking for Normality Plot")
+qqline(reg4$residuals,lwd=3,col="red3")
+
+#Checking for equality of variances
+plot(df$adom_agentdaysonmarket,rstandard(reg4),pch=20,main="Equality of Variances")
+abline(0,0,col="red",lwd=3)
+
+#Checking for leverage points
+lev=hat(model.matrix(reg4))
+plot(lev,pch=20,ylim=c(0,.3),main="Leverage Points")
+abline(3*mean(lev),0,col="red",lwd=3)
+
+vif4<-vif(reg4)
+vif4
+```
+
+```{r}
+reg5<-lm(formula = adom_agentdaysonmarket~bathstotal+garages+PoolType+sppersqft+splsale+lotsqft+Roof+location+Age+poly(DaysOnMLSbeforeAgent,3)+quarter+negotiate,data = df)
+summary(reg5)
+
+#Checking for linearity
+plot(reg5$fitted.values,df$adom_agentdaysonmarket,pch=1,main="Predicted Values vs Actual ADOM",ylab = "Predicted ADOM",xlab = "Actual ADOM")
+abline(0,1,col="red3",lwd=3)
+
+#checking for normality
+qqnorm(reg5$residuals,pch=20,main="Checking for Normality Plot")
+qqline(reg5$residuals,lwd=3,col="red3")
+
+#Checking for equality of variances
+plot(df$adom_agentdaysonmarket,rstandard(reg5),pch=20,main="Equality of Variances")
+abline(0,0,col="red",lwd=3)
+
+#Checking for leverage points
+lev=hat(model.matrix(reg5))
+plot(lev,pch=20,ylim=c(0,.3),main="Leverage Points")
+abline(3*mean(lev),0,col="red",lwd=3)
+
+vif5<-vif(reg5)
+vif5
+```
+
+
+```{r}
+reg6<-lm(formula = adom_agentdaysonmarket~bathstotal+garages+PoolType+Roof+splsale+location+Age+poly(DaysOnMLSbeforeAgent,3)+quarter+negotiate,data = df)
+summary(reg6)
+
+#Checking for linearity
+plot(reg6$fitted.values,df$adom_agentdaysonmarket,pch=1,main="Predicted Values vs Actual ADOM",ylab = "Predicted ADOM",xlab = "Actual ADOM")
+abline(0,1,col="red3",lwd=3)
+
+#checking for normality
+qqnorm(reg6$residuals,pch=20,main="Checking for Normality Plot")
+qqline(reg6$residuals,lwd=3,col="red3")
+
+#Checking for equality of variances
+plot(df$adom_agentdaysonmarket,rstandard(reg6),pch=20,main="Equality of Variances")
+abline(0,0,col="red",lwd=3)
+
+#Checking for leverage points
+lev=hat(model.matrix(reg6))
+plot(lev,pch=20,ylim=c(0,.3),main="Leverage Points")
+abline(3*mean(lev),0,col="red",lwd=3)
+
+vif6<-vif(reg6)
+vif6
+
+summary(df$negotiate)
+```
+
+
+
+```{r}
+stargazer(reg4,reg5,reg6,type="text",title='Results',align = TRUE,single.row=TRUE,digits=2,out = "reg3.txt")
+stargazer(vif4,vif5,vif6,type="text",title='Results',align = TRUE,out = "reg4.txt")
+```
